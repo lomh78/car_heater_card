@@ -1,0 +1,38 @@
+{
+  "title": "Motorvärmare",
+  "times": "Tider",
+  "departure": "Avresa",
+  "start": "Start",
+  "stop": "Stopp",
+  "running_time": "Gångtid",
+  "temperature": "Temperatur",
+  "temperature_source": "Temperaturkälla",
+  "power": "Förbrukning",
+  "enable": "Aktivera",
+  "one_time": "Engångstid",
+  "start_now": "Starta nu",
+  "stop_now": "Stoppa",
+  "manual_departure": "Manuell avresa",
+  "workday_departure": "Arbetsdag avresa",
+  "time": "Tid",
+  "hour": "Timme",
+  "minute": "Minut",
+  "cancel": "Avbryt",
+  "save": "Spara",
+  "state": {
+    "on": "På",
+    "off": "Av"
+  },
+  "status": {
+    "waiting": "Väntar",
+    "scheduled": "Schemalagd",
+    "running": "Kör",
+    "manual": "Manuell",
+    "start_now": "Startad nu",
+    "no_temperature": "Ingen temperatur",
+    "disabled": "Avaktiverad",
+    "unavailable": "Otillgänglig",
+    "unknown": "Okänd",
+    "no_departure": "Ingen avresa"
+  }
+}
