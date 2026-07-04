@@ -34,5 +34,10 @@
     "unavailable": "Unavailable",
     "unknown": "Unknown",
     "no_departure": "No departure"
-  }
+  },
+  "graph": "Graph",
+  "hours_short": " h",
+  "planned_runtime": "Planned runtime",
+  "runtime_history": "Runtime history",
+  "loading": "Loading..."
 }

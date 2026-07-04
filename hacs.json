@@ -1,6 +1,6 @@
 {
   "name": "Car Heater Card",
-  "filename": "car-heater-card.js",
+  "filename": "dist/car-heater-card.js",
   "hacs": "0.19.0",
   "render_readme": true
 }

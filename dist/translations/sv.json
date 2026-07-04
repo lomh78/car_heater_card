@@ -34,5 +34,10 @@
     "unavailable": "Otillgänglig",
     "unknown": "Okänd",
     "no_departure": "Ingen avresa"
-  }
+  },
+  "graph": "Graf",
+  "hours_short": " h",
+  "planned_runtime": "Planerad gångtid",
+  "runtime_history": "Körhistorik",
+  "loading": "Laddar..."
 }

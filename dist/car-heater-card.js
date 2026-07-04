@@ -8,6 +8,8 @@ class CarHeaterCard extends HTMLElement {
     this._translations = {};
     this._loadedLanguages = new Set();
     this._loadingLanguages = new Set();
+    this._historyCache = {};
+    this._historyLoading = new Set();
   }
 
   setConfig(config) {
@@ -73,6 +75,7 @@ class CarHeaterCard extends HTMLElement {
     this._hass = hass;
     this.ensureTranslations();
     this.ensureAutoEntities();
+    this.ensureHistory();
     // Do not re-render while the time picker is open. Home Assistant pushes
     // frequent state updates, and a re-render would reset the wheel/select
     // back to the stored entity value before the user has time to save.
@@ -148,6 +151,7 @@ class CarHeaterCard extends HTMLElement {
       temperature: byKey('temperature'),
       temperature_source: byKey('temperature_source'),
       status: byKey('status'),
+      heater_switch: byKey('heater') || byKey('heater_switch'),
       enable_switch: byKey('enabled'),
       one_time_switch: byKey('manual_active'),
       manual_departure_time: byKey('manual_departure'),
@@ -291,6 +295,223 @@ class CarHeaterCard extends HTMLElement {
     this.shadowRoot.querySelector('.picker-save')?.addEventListener('click', () => this.saveTimePicker());
   }
 
+
+  historyEnabled() {
+    return this.config.show_temperature_graph || this.config.show_power_graph || this.config.show_runtime_history || this.config.show_planned_runtime;
+  }
+
+  graphHours() {
+    const value = Number(this.config.graph_hours ?? 24);
+    return Number.isFinite(value) && value > 0 ? Math.min(168, Math.max(1, value)) : 24;
+  }
+
+  runtimeHistoryDays() {
+    const value = Number(this.config.runtime_history_days ?? 7);
+    return Number.isFinite(value) && value > 0 ? Math.min(31, Math.max(1, value)) : 7;
+  }
+
+  async ensureHistory() {
+    if (!this._hass || !this.historyEnabled()) return;
+    const e = this.resolvedEntities;
+    if (this.config.show_temperature_graph) this.loadHistory('temperature', e.temperature, this.graphHours());
+    if (this.config.show_power_graph) this.loadHistory('power', e.power_sensor || this.config.power_sensor, this.graphHours());
+    if (this.config.show_runtime_history) this.loadHistory('runtime', e.heater_switch || e.power_sensor || this.config.power_sensor, this.runtimeHistoryDays() * 24, true);
+  }
+
+  async loadHistory(kind, entity, hours, forceFull = false) {
+    if (!entity || !this._hass) return;
+    const now = new Date();
+    const cacheKey = `${kind}:${entity}:${hours}`;
+    const cached = this._historyCache[cacheKey];
+    if (cached && now.getTime() - cached.loaded < 5 * 60 * 1000) return;
+    if (this._historyLoading.has(cacheKey)) return;
+    this._historyLoading.add(cacheKey);
+    try {
+      const start = new Date(now.getTime() - hours * 60 * 60 * 1000);
+      const result = await this._hass.callWS({
+        type: 'history/history_during_period',
+        start_time: start.toISOString(),
+        end_time: now.toISOString(),
+        entity_ids: [entity],
+        significant_changes_only: false,
+        minimal_response: false,
+        no_attributes: true,
+      });
+      const rows = Array.isArray(result) ? (result[0] || []) : [];
+      this._historyCache[cacheKey] = { loaded: now.getTime(), start, end: now, entity, rows, forceFull };
+      if (!this._timePicker) this.render();
+    } catch (err) {
+      console.warn(`car-heater-card: could not load ${kind} history`, err);
+    } finally {
+      this._historyLoading.delete(cacheKey);
+    }
+  }
+
+  history(kind, entity, hours) {
+    return this._historyCache[`${kind}:${entity}:${hours}`];
+  }
+
+  numericPoints(cache) {
+    if (!cache) return [];
+    return cache.rows.map((row) => {
+      const value = Number(row.state);
+      const ts = new Date(row.last_changed || row.last_updated).getTime();
+      if (!Number.isFinite(value) || !Number.isFinite(ts)) return null;
+      return { ts, value };
+    }).filter(Boolean);
+  }
+
+  timeToDateInRange(hhmm, start, end) {
+    if (!hhmm || hhmm === '—') return [];
+    const [hh, mm] = String(hhmm).slice(0, 5).split(':').map(Number);
+    if (!Number.isFinite(hh) || !Number.isFinite(mm)) return [];
+    const dates = [];
+    for (let offset = -1; offset <= 1; offset += 1) {
+      const d = new Date(end);
+      d.setDate(d.getDate() + offset);
+      d.setHours(hh, mm, 0, 0);
+      if (d >= start && d <= end) dates.push(d);
+    }
+    return dates;
+  }
+
+  scheduledRanges(start, end) {
+    const e = this.resolvedEntities;
+    const startVal = this.state(e.start_time, '');
+    const stopVal = this.state(e.stop_time, '');
+    const depVal = this.state(e.departure_time, '');
+    const starts = this.timeToDateInRange(startVal, new Date(start.getTime() - 24 * 60 * 60 * 1000), end);
+    const ranges = [];
+    starts.forEach((s) => {
+      const [sh, sm] = String(startVal).slice(0, 5).split(':').map(Number);
+      const [eh, em] = String(stopVal).slice(0, 5).split(':').map(Number);
+      if (!Number.isFinite(eh) || !Number.isFinite(em)) return;
+      const stop = new Date(s);
+      stop.setHours(eh, em, 0, 0);
+      if (stop <= s) stop.setDate(stop.getDate() + 1);
+      if (stop >= start && s <= end) ranges.push({ start: s, stop });
+    });
+    const departures = this.timeToDateInRange(depVal, start, end);
+    return { ranges, departures };
+  }
+
+  linePath(points, x, y) {
+    return points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${x(p.ts).toFixed(1)} ${y(p.value).toFixed(1)}`).join(' ');
+  }
+
+  chartTemplate() {
+    const e = this.resolvedEntities;
+    const showTemp = !!this.config.show_temperature_graph;
+    const showPower = !!this.config.show_power_graph;
+    const showRuntime = !!this.config.show_runtime_history;
+    const showPlan = !!this.config.show_planned_runtime;
+    if (!showTemp && !showPower && !showRuntime && !showPlan) return '';
+
+    const hours = this.graphHours();
+    const now = new Date();
+    const start = new Date(now.getTime() - hours * 60 * 60 * 1000);
+    const width = 600;
+    const height = 150;
+    const pad = { left: 34, right: 10, top: 12, bottom: 24 };
+    const x = (ts) => pad.left + ((ts - start.getTime()) / (now.getTime() - start.getTime())) * (width - pad.left - pad.right);
+
+    const series = [];
+    if (showTemp) {
+      const cache = this.history('temperature', e.temperature, hours);
+      const points = this.numericPoints(cache);
+      if (points.length > 1) series.push({ key: 'temperature', label: this.t('temperature'), points, unit: this.unit(e.temperature) || '°C', cls: 'temp-line' });
+    }
+    if (showPower) {
+      const pEntity = e.power_sensor || this.config.power_sensor;
+      const cache = this.history('power', pEntity, hours);
+      const points = this.numericPoints(cache);
+      if (points.length > 1) series.push({ key: 'power', label: this.t('power'), points, unit: this.unit(pEntity) || 'W', cls: 'power-line' });
+    }
+
+    let min = Infinity;
+    let max = -Infinity;
+    series.forEach((s) => s.points.forEach((p) => { min = Math.min(min, p.value); max = Math.max(max, p.value); }));
+    if (!Number.isFinite(min) || !Number.isFinite(max)) { min = 0; max = 1; }
+    if (min === max) { min -= 1; max += 1; }
+    const range = max - min;
+    min -= range * 0.08;
+    max += range * 0.08;
+    const y = (value) => pad.top + (1 - (value - min) / (max - min)) * (height - pad.top - pad.bottom);
+    const { ranges, departures } = this.scheduledRanges(start, now);
+
+    const planSvg = showPlan ? ranges.map((r) => {
+      const x1 = Math.max(pad.left, x(r.start.getTime()));
+      const x2 = Math.min(width - pad.right, x(r.stop.getTime()));
+      if (x2 <= x1) return '';
+      return `<rect class="planned-band" x="${x1.toFixed(1)}" y="${pad.top}" width="${(x2 - x1).toFixed(1)}" height="${height - pad.top - pad.bottom}" rx="8"></rect>`;
+    }).join('') : '';
+    const depSvg = showPlan ? departures.map((d) => `<line class="departure-line" x1="${x(d.getTime()).toFixed(1)}" x2="${x(d.getTime()).toFixed(1)}" y1="${pad.top}" y2="${height - pad.bottom}"></line>`).join('') : '';
+    const linesSvg = series.map((s) => `<path class="${s.cls}" d="${this.linePath(s.points, x, y)}"></path>`).join('');
+    const legend = [
+      ...(showTemp ? [`<span><i class="dot temp"></i>${this.t('temperature')}</span>`] : []),
+      ...(showPower ? [`<span><i class="dot power"></i>${this.t('power')}</span>`] : []),
+      ...(showPlan ? [`<span><i class="dot plan"></i>${this.t('planned_runtime')}</span>`] : []),
+    ].join('');
+
+    const runtime = showRuntime ? this.runtimeHistoryTemplate() : '';
+
+    return `<div class="graph-box">
+      <div class="graph-head"><strong>${this.t('graph')}</strong><span>${hours}${this.t('hours_short')}</span></div>
+      <svg class="history-graph" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none">
+        <line class="grid" x1="${pad.left}" x2="${width - pad.right}" y1="${pad.top}" y2="${pad.top}"></line>
+        <line class="grid" x1="${pad.left}" x2="${width - pad.right}" y1="${height - pad.bottom}" y2="${height - pad.bottom}"></line>
+        ${planSvg}
+        ${depSvg}
+        ${linesSvg}
+      </svg>
+      <div class="graph-legend">${legend}</div>
+      ${runtime}
+    </div>`;
+  }
+
+  runtimeHistoryTemplate() {
+    const e = this.resolvedEntities;
+    const entity = e.heater_switch || e.power_sensor || this.config.power_sensor;
+    const days = this.runtimeHistoryDays();
+    const cache = this.history('runtime', entity, days * 24);
+    if (!cache || !cache.rows.length) return `<div class="runtime-history"><div class="label">${this.t('runtime_history')}</div><div class="empty">${this.t('loading')}</div></div>`;
+    const end = new Date();
+    const start = new Date(end);
+    start.setDate(start.getDate() - days + 1);
+    start.setHours(0, 0, 0, 0);
+    const dayMs = 24 * 60 * 60 * 1000;
+    const buckets = Array.from({ length: days }, (_, i) => {
+      const d = new Date(start.getTime() + i * dayMs);
+      return { date: d, minutes: 0 };
+    });
+    const threshold = Number(this.config.power_runtime_threshold ?? 50);
+    const isOn = (row) => entity?.startsWith('switch.') || entity?.startsWith('binary_sensor.') ? row.state === 'on' : Number(row.state) > threshold;
+    const rows = cache.rows.map((row) => ({ state: row.state, ts: new Date(row.last_changed || row.last_updated).getTime() })).filter((r) => Number.isFinite(r.ts)).sort((a, b) => a.ts - b.ts);
+    if (!rows.length) return '';
+    for (let i = 0; i < rows.length; i += 1) {
+      const r = rows[i];
+      const nextTs = i + 1 < rows.length ? rows[i + 1].ts : end.getTime();
+      if (!isOn(r)) continue;
+      let a = Math.max(r.ts, start.getTime());
+      const b = Math.min(nextTs, end.getTime());
+      while (a < b) {
+        const dayIndex = Math.floor((a - start.getTime()) / dayMs);
+        if (dayIndex < 0 || dayIndex >= buckets.length) break;
+        const dayEnd = Math.min(b, start.getTime() + (dayIndex + 1) * dayMs);
+        buckets[dayIndex].minutes += (dayEnd - a) / 60000;
+        a = dayEnd;
+      }
+    }
+    const maxMinutes = Math.max(1, ...buckets.map((b) => b.minutes));
+    const bars = buckets.map((b) => {
+      const height = Math.max(2, Math.round((b.minutes / maxMinutes) * 42));
+      const label = b.date.toLocaleDateString(this.lang === 'sv' ? 'sv-SE' : 'en-US', { weekday: 'short' });
+      const time = b.minutes >= 60 ? `${Math.floor(b.minutes / 60)}h ${Math.round(b.minutes % 60)}m` : `${Math.round(b.minutes)}m`;
+      return `<div class="runtime-day" title="${time}"><div class="runtime-bar" style="height:${height}px"></div><span>${label}</span></div>`;
+    }).join('');
+    return `<div class="runtime-history"><div class="label">${this.t('runtime_history')}</div><div class="runtime-bars">${bars}</div></div>`;
+  }
+
   powerBar(powerEntity) {
     if (!powerEntity) return '';
     const raw = Number(this.state(powerEntity, '0'));
@@ -347,6 +568,27 @@ class CarHeaterCard extends HTMLElement {
           .time { border-radius:13px; background:var(--card-background-color); padding:10px; cursor:pointer; min-width:0; }
           .label { font-size:12px; color:var(--secondary-text-color); margin-bottom:4px; white-space:nowrap; }
           .value { font-size:18px; font-weight:800; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+          .graph-box { border:1px solid var(--divider-color); border-radius:18px; background:var(--secondary-background-color); padding:12px; margin-bottom:12px; }
+          .graph-head { display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:6px; }
+          .graph-head span { color:var(--secondary-text-color); font-size:12px; }
+          .history-graph { width:100%; height:150px; border-radius:14px; background:var(--card-background-color); }
+          .grid { stroke:var(--divider-color); stroke-width:1; }
+          .temp-line { fill:none; stroke:var(--info-color, #2196f3); stroke-width:3; stroke-linecap:round; stroke-linejoin:round; vector-effect:non-scaling-stroke; }
+          .power-line { fill:none; stroke:var(--warning-color, #ff9800); stroke-width:3; stroke-linecap:round; stroke-linejoin:round; vector-effect:non-scaling-stroke; }
+          .planned-band { fill:rgba(255,235,59,.20); stroke:none; }
+          .departure-line { stroke:var(--primary-color); stroke-width:2; stroke-dasharray:5 4; vector-effect:non-scaling-stroke; }
+          .graph-legend { display:flex; flex-wrap:wrap; gap:10px; margin-top:8px; color:var(--secondary-text-color); font-size:12px; }
+          .graph-legend span { display:flex; align-items:center; gap:5px; }
+          .dot { width:9px; height:9px; border-radius:999px; display:inline-block; }
+          .dot.temp { background:var(--info-color, #2196f3); }
+          .dot.power { background:var(--warning-color, #ff9800); }
+          .dot.plan { background:#ffeb3b; }
+          .runtime-history { margin-top:10px; }
+          .runtime-bars { height:62px; display:flex; align-items:end; gap:7px; padding:8px 2px 0; }
+          .runtime-day { flex:1; min-width:0; display:flex; flex-direction:column; align-items:center; gap:4px; color:var(--secondary-text-color); font-size:10px; }
+          .runtime-bar { width:100%; max-width:22px; border-radius:6px 6px 2px 2px; background:var(--primary-color); min-height:2px; }
+          .empty { color:var(--secondary-text-color); font-size:12px; padding:8px 0; }
           .main { display:grid; grid-template-columns:80px 1fr; gap:10px; margin-bottom:12px; }
           .heater-symbol { border:1px solid var(--divider-color); background:var(--secondary-background-color); border-radius:18px; display:flex; flex-direction:column; align-items:center; justify-content:center; min-height:122px; cursor:default; }
           .heater-symbol ha-icon { --mdc-icon-size:42px; color:var(--disabled-text-color); }
@@ -403,6 +645,8 @@ class CarHeaterCard extends HTMLElement {
               <div class="time" data-action="more" data-entity="${e.running_time || ''}"><div class="label">${this.t('running_time')}</div><div class="value">${this.fmt(e.running_time)}</div></div>
             </div>
           </div>
+
+          ${this.chartTemplate()}
 
           <div class="main">
             <div class="heater-symbol ${heaterOn ? 'on' : ''}">
@@ -532,8 +776,26 @@ class CarHeaterCardEditor extends HTMLElement {
         <label>Language, optional
           <input id="language" value="${cfg.language || ''}" placeholder="sv / en / auto">
         </label>
+        <label>Graph hours
+          <input id="graph_hours" type="number" min="1" max="168" value="${cfg.graph_hours ?? 24}">
+        </label>
+        <label>Runtime history days
+          <input id="runtime_days" type="number" min="1" max="31" value="${cfg.runtime_history_days ?? 7}">
+        </label>
         <label>
           <span><input id="show_settings" type="checkbox" ${cfg.show_time_settings !== false ? 'checked' : ''}> Show time settings</span>
+        </label>
+        <label>
+          <span><input id="show_temperature_graph" type="checkbox" ${cfg.show_temperature_graph ? 'checked' : ''}> Show temperature graph</span>
+        </label>
+        <label>
+          <span><input id="show_power_graph" type="checkbox" ${cfg.show_power_graph ? 'checked' : ''}> Show power graph</span>
+        </label>
+        <label>
+          <span><input id="show_planned_runtime" type="checkbox" ${cfg.show_planned_runtime ? 'checked' : ''}> Show planned runtime</span>
+        </label>
+        <label>
+          <span><input id="show_runtime_history" type="checkbox" ${cfg.show_runtime_history ? 'checked' : ''}> Show daily runtime history</span>
         </label>
         <div class="hint">The card detects entities from the selected Car Heater device. Use YAML only if you want to override individual entity IDs.</div>
       </div>`;
@@ -542,6 +804,12 @@ class CarHeaterCardEditor extends HTMLElement {
     this.shadowRoot.querySelector('#power')?.addEventListener('change', (ev) => this.valueChanged({ power_sensor: ev.target.value }));
     this.shadowRoot.querySelector('#language')?.addEventListener('change', (ev) => this.valueChanged({ language: ev.target.value }));
     this.shadowRoot.querySelector('#show_settings')?.addEventListener('change', (ev) => this.valueChanged({ show_time_settings: ev.target.checked }));
+    this.shadowRoot.querySelector('#show_temperature_graph')?.addEventListener('change', (ev) => this.valueChanged({ show_temperature_graph: ev.target.checked }));
+    this.shadowRoot.querySelector('#show_power_graph')?.addEventListener('change', (ev) => this.valueChanged({ show_power_graph: ev.target.checked }));
+    this.shadowRoot.querySelector('#show_planned_runtime')?.addEventListener('change', (ev) => this.valueChanged({ show_planned_runtime: ev.target.checked }));
+    this.shadowRoot.querySelector('#show_runtime_history')?.addEventListener('change', (ev) => this.valueChanged({ show_runtime_history: ev.target.checked }));
+    this.shadowRoot.querySelector('#graph_hours')?.addEventListener('change', (ev) => this.valueChanged({ graph_hours: Number(ev.target.value) || 24 }));
+    this.shadowRoot.querySelector('#runtime_days')?.addEventListener('change', (ev) => this.valueChanged({ runtime_history_days: Number(ev.target.value) || 7 }));
   }
 }
 

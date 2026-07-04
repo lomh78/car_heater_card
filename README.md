@@ -54,3 +54,11 @@ Resource URL after HACS install:
 ```yaml
 /local/community/car-heater-card/car-heater-card.js
 ```
+
+## 0.4.0
+
+- Temperature graph from Home Assistant history
+- Power graph from Home Assistant history
+- Planned runtime marker
+- Daily runtime history
+- All graph options are configurable in the visual editor
