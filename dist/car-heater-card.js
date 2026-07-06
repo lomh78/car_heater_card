@@ -1,5 +1,8 @@
 const DEFAULT_LANGUAGE = 'en';
 
+const CAR_HEATER_CARD_VERSION = '0.4.6';
+console.info(`Car Heater Card ${CAR_HEATER_CARD_VERSION}`);
+
 class CarHeaterCard extends HTMLElement {
   constructor() {
     super();
@@ -232,6 +235,11 @@ class CarHeaterCard extends HTMLElement {
   }
 
   isHeaterRunning(e) {
+    const attrs = this.statusAttributes();
+    if (typeof attrs.heater_switch_is_on === 'boolean') return attrs.heater_switch_is_on;
+    const attrState = String(attrs.heater_switch_state || '').toLowerCase();
+    if (attrState === 'on') return true;
+    if (attrState === 'off') return false;
     const heaterState = this.state(e.heater_switch, '');
     if (heaterState === 'on') return true;
     if (heaterState === 'off') return false;
@@ -788,7 +796,9 @@ class CarHeaterCard extends HTMLElement {
           .wrap { padding: 14px; }
           .head { display:flex; justify-content:space-between; align-items:center; gap:10px; margin-bottom:12px; }
           .title { font-size:20px; font-weight:700; display:flex; align-items:center; gap:8px; }
-          .state-pill { padding:6px 10px; border-radius:999px; background:var(--secondary-background-color); font-size:13px; font-weight:700; text-transform:none; }
+          .state-pill { padding:6px 10px; border-radius:999px; background:var(--secondary-background-color); font-size:13px; font-weight:700; text-transform:none; display:flex; align-items:center; gap:6px; }
+          .state-pill ha-icon { --mdc-icon-size:18px; color:var(--disabled-text-color); }
+          .state-pill.on ha-icon { color:#ffeb3b; filter:drop-shadow(0 0 4px rgba(255,235,59,.45)); }
           .times-box { border:1px solid var(--divider-color); border-radius:18px; background:var(--secondary-background-color); padding:12px; margin-bottom:12px; }
           .times-title { font-weight:700; margin-bottom:10px; display:flex; align-items:center; gap:6px; }
           .times { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:8px; }
@@ -872,7 +882,7 @@ class CarHeaterCard extends HTMLElement {
         <div class="wrap">
           <div class="head">
             <div class="title"><ha-icon icon="mdi:car-clock"></ha-icon>${title}</div>
-            <div class="state-pill">${status}</div>
+            <div class="state-pill ${heaterOn ? 'on' : 'off'}">${status}<ha-icon icon="mdi:car-seat-heater"></ha-icon></div>
           </div>
 
           <div class="times-box">
@@ -887,17 +897,6 @@ class CarHeaterCard extends HTMLElement {
 
           ${this.chartTemplate()}
 
-          <div class="main">
-            <div class="heater-symbol ${heaterOn ? 'on' : ''}">
-              <ha-icon icon="mdi:car-seat-heater"></ha-icon>
-              <div class="small">${heaterOn ? this.t('state.on') : this.t('state.off')}</div>
-            </div>
-            <div class="info-grid">
-              <div class="tile" data-action="more" data-entity="${e.temperature || ''}"><div class="label">${this.t('temperature')}</div><div class="value">${this.fmt(e.temperature)}</div></div>
-              <div class="tile" data-action="more" data-entity="${e.temperature_source || ''}"><div class="label">${this.t('temperature_source')}</div><div class="value">${this.state(e.temperature_source)}</div></div>
-              ${this.powerBar(powerEntity)}
-            </div>
-          </div>
 
           <div class="chips">
             <div class="chip ${enabled === 'on' ? 'on' : ''}" data-action="toggle" data-entity="${e.enable_switch || ''}" >${this.t('enable')}<span class="sub">${enabled === 'on' ? this.t('state.on') : this.t('state.off')}</span></div>
