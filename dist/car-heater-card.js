@@ -1,6 +1,6 @@
 const DEFAULT_LANGUAGE = 'en';
 
-const CAR_HEATER_CARD_VERSION = '0.5.5';
+const CAR_HEATER_CARD_VERSION = '0.5.6';
 console.info(`Car Heater Card ${CAR_HEATER_CARD_VERSION}`);
 
 class CarHeaterCard extends HTMLElement {
@@ -13,6 +13,7 @@ class CarHeaterCard extends HTMLElement {
     this._loadingLanguages = new Set();
     this._historyCache = {};
     this._historyLoading = new Set();
+    this._heatCurveOpen = false;
   }
 
   setConfig(config) {
@@ -280,6 +281,9 @@ class CarHeaterCard extends HTMLElement {
   }
 
   bind() {
+    const curveDetails = this.shadowRoot.querySelector('.curve-details');
+    curveDetails?.addEventListener('toggle', () => { this._heatCurveOpen = curveDetails.open; });
+
     this.shadowRoot.querySelectorAll('[data-action]').forEach((el) => {
       const action = el.dataset.action;
       const entity = el.dataset.entity;
@@ -767,10 +771,13 @@ class CarHeaterCard extends HTMLElement {
     const actualSvg = showPlan ? actualRanges.map((r) => bandRect(isCurrentRange(r) ? 'current-band' : 'actual-band', r, runtimeBandY)).join('') : '';
     const planSvg = showPlan ? ranges.map((r) => bandRect('planned-band', r, runtimeBandY)).join('') : '';
 
-    const marker = (cls, date, label, y2 = lanes.runtime.bottom + 3) => {
+    const marker = (cls, date, label) => {
       if (!date || date < graphStart || date > graphEnd) return '';
       const xx = x(date.getTime()).toFixed(1);
-      return `<line class="${cls}" x1="${xx}" x2="${xx}" y1="${pad.top}" y2="${y2}"></line><text class="axis-label marker-label" x="${xx}" y="${pad.top - 5}" text-anchor="middle">${label}</text>`;
+      const y1 = lanes.runtime.top + 2;
+      const y2 = lanes.runtime.bottom - 3;
+      const labelY = lanes.runtime.top - 5;
+      return `<line class="${cls}" x1="${xx}" x2="${xx}" y1="${y1}" y2="${y2}"></line><text class="axis-label marker-label" x="${xx}" y="${labelY}" text-anchor="middle">${label}</text>`;
     };
 
     const plannedMarkers = showPlan ? ranges.map((r) => `${marker('start-line', r.start, this.t('start'))}${marker('stop-line', r.stop, this.t('stop'))}`).join('') : '';
@@ -893,8 +900,12 @@ class CarHeaterCard extends HTMLElement {
       ? `<line class="curve-current-line" x1="${x(currentTemp).toFixed(1)}" x2="${x(currentTemp).toFixed(1)}" y1="${pad.top}" y2="${height - pad.bottom}"></line>`
       : '';
     const runtimeText = Number.isFinite(currentRuntime) ? ` • ${Math.round(currentRuntime)} min` : '';
-    return `<div class="curve-box">
-      <div class="graph-head"><strong>${this.t('heat_curve')}</strong><span>${labelMode}${runtimeText}</span></div>
+    const open = this._heatCurveOpen ? 'open' : '';
+    return `<details class="curve-box curve-details" ${open}>
+      <summary class="curve-summary">
+        <strong>${this.t('heat_curve')}</strong>
+        <span>${labelMode}${runtimeText}</span>
+      </summary>
       <svg class="curve-graph" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none">
         <line class="curve-base" x1="${pad.left}" x2="${width - pad.right}" y1="${height - pad.bottom}" y2="${height - pad.bottom}"></line>
         <line class="curve-base" x1="${pad.left}" x2="${pad.left}" y1="${pad.top}" y2="${height - pad.bottom}"></line>
@@ -903,7 +914,7 @@ class CarHeaterCard extends HTMLElement {
         ${pointSvg}
         ${axis}
       </svg>
-    </div>`;
+    </details>`;
   }
 
   runtimeHistoryTemplate() {
@@ -1074,6 +1085,19 @@ class CarHeaterCard extends HTMLElement {
           .dot.actual { background:#b8860b; }
           .dot.current { background:#ffd54f; }
           .dot.plan { background:#ff9800; }
+
+          .curve-box { border:1px solid var(--divider-color); border-radius:18px; background:var(--secondary-background-color); padding:0; margin-bottom:12px; overflow:hidden; }
+          .curve-summary { display:flex; justify-content:space-between; align-items:center; gap:8px; padding:12px; cursor:pointer; list-style:none; }
+          .curve-summary::-webkit-details-marker { display:none; }
+          .curve-summary::before { content:'▸'; color:var(--secondary-text-color); transition:transform .18s ease; font-size:12px; }
+          .curve-details[open] .curve-summary::before { transform:rotate(90deg); }
+          .curve-summary span { color:var(--secondary-text-color); font-size:12px; margin-left:auto; }
+          .curve-graph { width:100%; height:120px; background:var(--card-background-color); display:block; border-top:1px solid var(--divider-color); }
+          .curve-base { stroke:var(--divider-color); stroke-width:1; opacity:.75; vector-effect:non-scaling-stroke; }
+          .curve-line { fill:none; stroke:var(--info-color, #2196f3); stroke-width:2.7; stroke-linecap:round; stroke-linejoin:round; vector-effect:non-scaling-stroke; }
+          .curve-point { fill:var(--info-color, #2196f3); stroke:var(--card-background-color); stroke-width:1.5; vector-effect:non-scaling-stroke; }
+          .curve-axis { fill:var(--secondary-text-color); font-size:9px; font-weight:700; dominant-baseline:middle; }
+          .curve-current-line { stroke:var(--primary-text-color); stroke-width:1.2; stroke-dasharray:3 4; opacity:.7; vector-effect:non-scaling-stroke; }
           .runtime-history { margin-top:10px; }
           .runtime-bars { height:62px; display:flex; align-items:end; gap:7px; padding:8px 2px 0; }
           .runtime-day { flex:1; min-width:0; display:flex; flex-direction:column; align-items:center; gap:4px; color:var(--secondary-text-color); font-size:10px; }
