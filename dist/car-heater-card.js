@@ -1,6 +1,6 @@
 const DEFAULT_LANGUAGE = 'en';
 
-const CAR_HEATER_CARD_VERSION = '0.5.3';
+const CAR_HEATER_CARD_VERSION = '0.5.5';
 console.info(`Car Heater Card ${CAR_HEATER_CARD_VERSION}`);
 
 class CarHeaterCard extends HTMLElement {
@@ -192,6 +192,7 @@ class CarHeaterCard extends HTMLElement {
       workday_departure_time: byKey('workday_departure'),
       start_now_button: byKey('start_now'),
       stop_button: byKey('stop_now'),
+      runtime_curve: byKey('runtime_curve', 'heat_curve', 'heating_curve'),
       power_sensor: this.config?.power_sensor,
     };
   }
@@ -752,10 +753,8 @@ class CarHeaterCard extends HTMLElement {
 
     const { ranges, departures } = this.scheduledRanges(graphStart, graphEnd);
     const actualRanges = showPlan ? this.actualRuntimeRanges(graphStart, now) : [];
-    const bandHeight = 10;
-    const actualY = lanes.runtime.top + 3;
-    const currentY = lanes.runtime.top + 16;
-    const plannedY = lanes.runtime.top + 29;
+    const bandHeight = 16;
+    const runtimeBandY = lanes.runtime.top + 10;
 
     const bandRect = (cls, r, yPos) => {
       const x1 = Math.max(pad.left, x(r.start.getTime()));
@@ -765,8 +764,8 @@ class CarHeaterCard extends HTMLElement {
     };
 
     const isCurrentRange = (r) => r.stop && Math.abs(r.stop.getTime() - now.getTime()) < 90000 && this.isHeaterRunning(this.resolvedEntities);
-    const actualSvg = showPlan ? actualRanges.map((r) => bandRect(isCurrentRange(r) ? 'current-band' : 'actual-band', r, isCurrentRange(r) ? currentY : actualY)).join('') : '';
-    const planSvg = showPlan ? ranges.map((r) => bandRect('planned-band', r, plannedY)).join('') : '';
+    const actualSvg = showPlan ? actualRanges.map((r) => bandRect(isCurrentRange(r) ? 'current-band' : 'actual-band', r, runtimeBandY)).join('') : '';
+    const planSvg = showPlan ? ranges.map((r) => bandRect('planned-band', r, runtimeBandY)).join('') : '';
 
     const marker = (cls, date, label, y2 = lanes.runtime.bottom + 3) => {
       if (!date || date < graphStart || date > graphEnd) return '';
@@ -799,7 +798,7 @@ class CarHeaterCard extends HTMLElement {
     const legend = [
       ...(showTemp ? [`<span><i class="dot temp"></i>${this.t('temperature')}</span>`] : []),
       ...(showPower ? [`<span><i class="dot power"></i>${this.t('power')}</span>`] : []),
-      ...(showPlan ? [`<span><i class="dot actual"></i>${this.t('actual_runtime')}</span>`, `<span><i class="dot current"></i>${this.t('status.running')}</span>`, `<span><i class="dot plan"></i>${this.t('planned_runtime')}</span>`] : []),
+      ...(showPlan ? [`<span><i class="dot actual"></i>${this.t('historical_runtime')}</span>`, `<span><i class="dot current"></i>${this.t('status.running')}</span>`, `<span><i class="dot plan"></i>${this.t('planned_runtime')}</span>`] : []),
     ].join('');
 
     const runtime = showRuntime ? this.runtimeHistoryTemplate() : '';
@@ -816,12 +815,94 @@ class CarHeaterCard extends HTMLElement {
         ${tempSvg}
         ${powerSvg}
         ${valueLabels}
-        ${actualSvg}
         ${planSvg}
+        ${actualSvg}
         ${noData}
       </svg>
       <div class="graph-legend">${legend}</div>
       ${runtime}
+    </div>`;
+  }
+
+
+
+  runtimeCurveEntity() {
+    const e = this.resolvedEntities;
+    return e.runtime_curve || this.config.runtime_curve_entity;
+  }
+
+  heatCurveData() {
+    const entity = this.runtimeCurveEntity();
+    const obj = this.obj(entity);
+    const attrs = obj?.attributes || {};
+    const statusCurve = this.attrPath('runtime.curve');
+    const curve = attrs.curve || statusCurve || [];
+    const tempLimit = Number(attrs.temperature_limit ?? this.attrPath('runtime.temperature_limit'));
+    const mode = String(attrs.mode || this.attrPath('runtime.mode') || obj?.state || '').toLowerCase();
+    const curveMode = String(attrs.curve_mode || this.attrPath('runtime.curve_mode') || mode || '').toLowerCase();
+    const points = Array.isArray(curve) ? curve.map((point) => {
+      let delta;
+      let minutes;
+      if (Array.isArray(point)) {
+        delta = Number(point[0]);
+        minutes = Number(point[1]);
+      } else if (point && typeof point === 'object') {
+        delta = Number(point.delta ?? point.degrees_below_limit ?? point.x ?? point.temperature_delta);
+        minutes = Number(point.minutes ?? point.runtime_minutes ?? point.y ?? point.value);
+      }
+      if (!Number.isFinite(delta) || !Number.isFinite(minutes)) return null;
+      return {
+        delta,
+        minutes,
+        temperature: Number.isFinite(tempLimit) ? tempLimit - delta : -delta,
+      };
+    }).filter(Boolean).sort((a, b) => b.temperature - a.temperature) : [];
+    return { entity, points, tempLimit, mode, curveMode };
+  }
+
+  heatCurveTemplate() {
+    const cfg = this.config || {};
+    if (cfg.show_heat_curve === false) return '';
+    const data = this.heatCurveData();
+    if (!data.points.length) return '';
+
+    const width = 360;
+    const height = 118;
+    const pad = { left: 28, right: 18, top: 12, bottom: 22 };
+    const plotW = width - pad.left - pad.right;
+    const plotH = height - pad.top - pad.bottom;
+    const temps = data.points.map((p) => p.temperature).filter(Number.isFinite);
+    const runtimes = data.points.map((p) => p.minutes).filter(Number.isFinite);
+    if (!temps.length || !runtimes.length) return '';
+    const minTemp = Math.min(...temps);
+    const maxTemp = Math.max(...temps);
+    const maxRuntime = Math.max(1, ...runtimes);
+    const x = (temperature) => pad.left + ((temperature - minTemp) / Math.max(1, maxTemp - minTemp)) * plotW;
+    const y = (minutes) => pad.top + plotH - (Math.max(0, minutes) / maxRuntime) * plotH;
+    const path = data.points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${x(p.temperature).toFixed(1)} ${y(p.minutes).toFixed(1)}`).join(' ');
+    const pointSvg = data.points.map((p) => `<circle class="curve-point" cx="${x(p.temperature).toFixed(1)}" cy="${y(p.minutes).toFixed(1)}" r="2.8"></circle>`).join('');
+    const axis = data.points.map((p) => {
+      const xx = x(p.temperature).toFixed(1);
+      const label = `${p.temperature > 0 ? '+' : ''}${Math.round(p.temperature)}°`;
+      return `<text class="curve-axis" x="${xx}" y="${height - 5}" text-anchor="middle">${label}</text>`;
+    }).join('');
+    const labelMode = data.curveMode.includes('manual') || data.mode.includes('manual') ? this.t('manual_calculation') : this.t('automatic_calculation');
+    const currentTemp = Number(this.attrPath('temperature.current') ?? this.state(this.temperatureEntity(), ''));
+    const currentRuntime = Number(this.attrPath('runtime.minutes'));
+    const currentMarker = Number.isFinite(currentTemp) && currentTemp >= minTemp && currentTemp <= maxTemp
+      ? `<line class="curve-current-line" x1="${x(currentTemp).toFixed(1)}" x2="${x(currentTemp).toFixed(1)}" y1="${pad.top}" y2="${height - pad.bottom}"></line>`
+      : '';
+    const runtimeText = Number.isFinite(currentRuntime) ? ` • ${Math.round(currentRuntime)} min` : '';
+    return `<div class="curve-box">
+      <div class="graph-head"><strong>${this.t('heat_curve')}</strong><span>${labelMode}${runtimeText}</span></div>
+      <svg class="curve-graph" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none">
+        <line class="curve-base" x1="${pad.left}" x2="${width - pad.right}" y1="${height - pad.bottom}" y2="${height - pad.bottom}"></line>
+        <line class="curve-base" x1="${pad.left}" x2="${pad.left}" y1="${pad.top}" y2="${height - pad.bottom}"></line>
+        ${currentMarker}
+        <path class="curve-line" d="${path}"></path>
+        ${pointSvg}
+        ${axis}
+      </svg>
     </div>`;
   }
 
@@ -969,9 +1050,9 @@ class CarHeaterCard extends HTMLElement {
           .current-value { fill:var(--primary-text-color); font-size:17px; font-weight:800; dominant-baseline:middle; paint-order:stroke; stroke:var(--card-background-color); stroke-width:4px; stroke-linejoin:round; }
           .temp-value { fill:var(--info-color, #2196f3); }
           .power-value { fill:#ab47bc; }
-          .planned-band { fill:rgba(184,134,11,.78); stroke:none; }
-          .actual-band { fill:rgba(255,152,0,.82); stroke:none; }
-          .current-band { fill:rgba(255,213,79,.92); stroke:none; }
+          .planned-band { fill:rgba(255,152,0,.78); stroke:none; }
+          .actual-band { fill:rgba(184,134,11,.86); stroke:none; }
+          .current-band { fill:rgba(255,213,79,.94); stroke:none; }
           .now-line { stroke:#66bb6a; stroke-width:1.8; opacity:.95; vector-effect:non-scaling-stroke; }
           .axis-label { fill:var(--secondary-text-color); font-size:11px; dominant-baseline:middle; }
           .now-label { font-size:10px; opacity:.9; font-weight:700; }
@@ -990,9 +1071,9 @@ class CarHeaterCard extends HTMLElement {
           .dot { width:9px; height:9px; border-radius:999px; display:inline-block; }
           .dot.temp { background:var(--info-color, #2196f3); }
           .dot.power { background:#ab47bc; }
-          .dot.actual { background:#ff9800; }
+          .dot.actual { background:#b8860b; }
           .dot.current { background:#ffd54f; }
-          .dot.plan { background:#b8860b; }
+          .dot.plan { background:#ff9800; }
           .runtime-history { margin-top:10px; }
           .runtime-bars { height:62px; display:flex; align-items:end; gap:7px; padding:8px 2px 0; }
           .runtime-day { flex:1; min-width:0; display:flex; flex-direction:column; align-items:center; gap:4px; color:var(--secondary-text-color); font-size:10px; }
@@ -1056,7 +1137,7 @@ class CarHeaterCard extends HTMLElement {
           </div>
 
           ${this.chartTemplate()}
-
+          ${this.heatCurveTemplate()}
 
           <div class="chips">
             <div class="chip ${enabled === 'on' ? 'on' : ''}" data-action="toggle" data-entity="${e.enable_switch || ''}" >${this.t('enable')}<span class="sub">${enabled === 'on' ? this.t('state.on') : this.t('state.off')}</span></div>
@@ -1203,6 +1284,9 @@ class CarHeaterCardEditor extends HTMLElement {
           <input id="runtime_days" type="number" min="1" max="31" value="${cfg.runtime_history_days ?? 7}">
         </label>
         <label>
+          <span><input id="show_heat_curve" type="checkbox" ${cfg.show_heat_curve !== false ? 'checked' : ''}> Show heating curve</span>
+        </label>
+        <label>
           <span><input id="show_settings" type="checkbox" ${cfg.show_time_settings !== false ? 'checked' : ''}> Show time settings</span>
         </label>
         <label>
@@ -1222,6 +1306,7 @@ class CarHeaterCardEditor extends HTMLElement {
     this.shadowRoot.querySelector('#device')?.addEventListener('change', (ev) => this.valueChanged({ device_id: ev.target.value, entities: undefined }));
     this.shadowRoot.querySelector('#title')?.addEventListener('input', (ev) => this.valueChanged({ title: ev.target.value }));
         this.shadowRoot.querySelector('#language')?.addEventListener('input', (ev) => this.valueChanged({ language: ev.target.value }));
+    this.shadowRoot.querySelector('#show_heat_curve')?.addEventListener('change', (ev) => this.valueChanged({ show_heat_curve: ev.target.checked }));
     this.shadowRoot.querySelector('#show_settings')?.addEventListener('change', (ev) => this.valueChanged({ show_time_settings: ev.target.checked }));
     this.shadowRoot.querySelector('#show_temperature_graph')?.addEventListener('change', (ev) => this.valueChanged({ show_temperature_graph: ev.target.checked }));
     this.shadowRoot.querySelector('#show_power_graph')?.addEventListener('change', (ev) => this.valueChanged({ show_power_graph: ev.target.checked }));
