@@ -1,6 +1,6 @@
 const DEFAULT_LANGUAGE = 'en';
 
-const CAR_HEATER_CARD_VERSION = '0.6.1';
+const CAR_HEATER_CARD_VERSION = '0.6.2';
 console.info(`Car Heater Card ${CAR_HEATER_CARD_VERSION}`);
 
 
@@ -215,7 +215,7 @@ class CarHeaterSlideSwitch extends HTMLElement {
           display:flex;
           align-items:center;
           justify-content:center;
-          transition:transform .2s cubic-bezier(.2,.8,.2,1);
+          transition:none;
           will-change:transform;
           pointer-events:none;
         }
@@ -232,6 +232,7 @@ class CarHeaterSlideSwitch extends HTMLElement {
         }
         .knob::before { content:'›'; font-size:22px; line-height:1; transform:translateX(1px); }
         .track.on .knob::before { content:'‹'; transform:translateX(-1px); }
+        .track.animate .knob-hit { transition:transform .2s cubic-bezier(.2,.8,.2,1); }
         .track.dragging .knob-hit { transition:none; }
       </style>
       <div class="track" part="track">
