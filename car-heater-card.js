@@ -1,6 +1,6 @@
 const DEFAULT_LANGUAGE = 'en';
 
-const CAR_HEATER_CARD_VERSION = '0.6.1';
+const CAR_HEATER_CARD_VERSION = '0.6.4';
 console.info(`Car Heater Card ${CAR_HEATER_CARD_VERSION}`);
 
 
@@ -27,8 +27,10 @@ class CarHeaterSlideSwitch extends HTMLElement {
 
   connectedCallback() {
     this.render();
-    this.syncFromAttribute(false);
-    this.scheduleSync(false);
+    this._checked = this.hasAttribute('checked');
+    this.updateText();
+    this.style.visibility = 'hidden';
+    this.scheduleSync(false, true);
   }
 
   disconnectedCallback() {
@@ -47,8 +49,8 @@ class CarHeaterSlideSwitch extends HTMLElement {
       this.updateText();
       return;
     }
-    this.syncFromAttribute(true);
-    this.scheduleSync(true);
+    this.syncFromAttribute(false);
+    this.scheduleSync(false);
     this.updateText();
   }
 
@@ -71,18 +73,21 @@ class CarHeaterSlideSwitch extends HTMLElement {
   }
 
   syncFromAttribute(animate = true) {
-    this._checked = this.hasAttribute('checked');
-    this.setVisual(this._checked ? this.maxPos() : 0, animate);
+    const nextChecked = this.hasAttribute('checked');
+    const changed = nextChecked !== this._checked;
+    this._checked = nextChecked;
+    this.setVisual(this._checked ? this.maxPos() : 0, animate && changed);
     this.updateText();
   }
 
-  scheduleSync(animate = true) {
+  scheduleSync(animate = true, reveal = false) {
     if (this._syncFrame) window.cancelAnimationFrame(this._syncFrame);
     this._syncFrame = window.requestAnimationFrame(() => {
       this._syncFrame = window.requestAnimationFrame(() => {
         this._syncFrame = null;
         if (!this.isConnected || this._dragging) return;
         this.syncFromAttribute(animate);
+        if (reveal) this.style.visibility = 'visible';
       });
     });
   }
@@ -139,8 +144,8 @@ class CarHeaterSlideSwitch extends HTMLElement {
       this._pending = false;
       if (this._pendingTimer) window.clearTimeout(this._pendingTimer);
       this._pendingTimer = null;
-      this.syncFromAttribute(true);
-      this.scheduleSync(true);
+      this.syncFromAttribute(false);
+      this.scheduleSync(false);
     }
   }
 
@@ -215,7 +220,7 @@ class CarHeaterSlideSwitch extends HTMLElement {
           display:flex;
           align-items:center;
           justify-content:center;
-          transition:transform .2s cubic-bezier(.2,.8,.2,1);
+          transition:none;
           will-change:transform;
           pointer-events:none;
         }
@@ -232,6 +237,7 @@ class CarHeaterSlideSwitch extends HTMLElement {
         }
         .knob::before { content:'›'; font-size:22px; line-height:1; transform:translateX(1px); }
         .track.on .knob::before { content:'‹'; transform:translateX(-1px); }
+        .track.animate .knob-hit { transition:transform .2s cubic-bezier(.2,.8,.2,1); }
         .track.dragging .knob-hit { transition:none; }
       </style>
       <div class="track" part="track">
@@ -377,7 +383,38 @@ class CarHeaterCard extends HTMLElement {
     if (this._timePicker && this.shadowRoot.querySelector('.picker-overlay')) return;
     const slide = this.shadowRoot?.querySelector('car-heater-slide-switch');
     if (slide?.busy) return;
+    const signature = this.renderSignature();
+    if (this._lastRenderSignature === signature && this.shadowRoot?.querySelector('.wrap')) return;
+    this._lastRenderSignature = signature;
     this.render();
+  }
+
+  renderSignature() {
+    const entities = this.resolvedEntities || {};
+    const stateFor = (entityId) => {
+      if (!entityId) return '';
+      const st = this._hass?.states?.[entityId];
+      if (!st) return 'missing';
+      const attrs = st.attributes || {};
+      if (entityId === entities.status_sensor) {
+        return JSON.stringify({s: st.state, a: attrs});
+      }
+      return JSON.stringify({s: st.state, n: attrs.friendly_name});
+    };
+    const keys = [
+      'status_sensor','departure_time','start_time','stop_time','running_time',
+      'manual_departure_time','workday_departure_time','enable_switch','one_time_switch',
+      'start_now_button','stop_button','runtime_curve_sensor'
+    ];
+    return JSON.stringify({
+      config: this.config,
+      lang: this.lang,
+      entities,
+      states: keys.map((key) => [key, stateFor(entities[key])]),
+      heatCurveOpen: this._heatCurveOpen,
+      picker: !!this._timePicker,
+      historyKeys: Object.keys(this._historyCache || {}).sort(),
+    });
   }
 
   static getConfigElement() {
@@ -389,6 +426,21 @@ class CarHeaterCard extends HTMLElement {
   }
 
   getCardSize() { return 5; }
+
+  preserveScrollDuringRender() {
+    return {
+      x: window.scrollX || 0,
+      y: window.scrollY || 0,
+    };
+  }
+
+  restoreScrollAfterRender(position) {
+    // Do not force page scroll position after renders. Re-applying window.scrollTo
+    // during Home Assistant updates can make the dashboard jump upward while the
+    // user is reading or scrolling. The card keeps its own layout height stable
+    // enough that the browser can preserve scroll naturally.
+  }
+
 
   isCarHeaterDevice(device) {
     const identifiers = Array.from(device?.identifiers || []);
@@ -1467,6 +1519,7 @@ class CarHeaterCard extends HTMLElement {
 
   render() {
     if (!this._hass || !this.config) return;
+    const _scrollPosition = this.preserveScrollDuringRender();
     const e = this.resolvedEntities;
     const title = this.config.title || this.t('title');
     const showSettings = this.config.show_time_settings !== false;
@@ -1670,6 +1723,7 @@ class CarHeaterCard extends HTMLElement {
     this.bind();
     this.bindSlideToggles();
     this.bindPicker();
+    this.restoreScrollAfterRender(_scrollPosition);
   }
 }
 
