@@ -1,64 +1,71 @@
-<p align="center">
-  <img src="docs/images/logo.png" alt="Car Heater Card" width="180">
-</p>
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/dark_logo.png">
+  <img alt="Car Heater Logo" src="docs/images/logo.png" width="250">
+</picture>
 
-# Car Heater Card
+# 🚗 Car Heater Card
 
-A Lovelace custom card for the Home Assistant **Car Heater** integration.
+A modern Lovelace dashboard card for the Car Heater integration.
+
+The card focuses on simplicity while providing detailed information about heating schedules, runtime history and power consumption.
+
+---
 
 ## Features
 
-- Shows departure, start, stop and run time in one panel
-- Temperature and temperature source display
-- Optional power bar
-- Start now and stop controls
-- Manual/workday departure time picker
-- Swedish and English translations
-- Visual editor support
-- Automatic entity detection from the Car Heater device
-- HACS frontend compatible
+- 🚗 Modern dashboard layout
+- 📅 Timeline
+- 🌡 Temperature history
+- ⚡ Power history
+- 📈 Heating Curve
+- 🟡 Planned runtime
+- 🟨 Running runtime
+- 🟧 Historical runtime
+- 🟢 Current time indicator
+- 🔵 Departure indicator
+- 🖱 Custom One-Time Departure slider
+- 🌍 English and Swedish translations
+- 🌙 Dark mode support
+- ☀️ Light mode support
+- 🧩 Visual editor
+- ❤️ HACS compatible
 
-## Installation with HACS
+---
 
-1. Open HACS.
-2. Go to **Frontend**.
-3. Add this repository as a custom repository.
-4. Select category **Dashboard** or **Lovelace/Frontend** depending on your HACS version.
-5. Install **Car Heater Card**.
-6. Reload the browser cache.
+## Installation
 
-HACS should add the resource automatically. If not, add:
+Install through HACS.
 
-```yaml
-url: /hacsfiles/car-heater-card/car-heater-card.js
-type: module
-```
+After installation refresh your browser cache.
 
-## Example
+Add the card manually:
 
 ```yaml
 type: custom:car-heater-card
+entity: sensor.car_heater_status
 ```
 
-The card normally detects entities from the Car Heater device automatically. If you have more than one Car Heater device, select the device in the visual editor.
+---
 
-#
-## HACS
+## Configuration
 
-Add this repository as a custom repository in HACS with category **Dashboard**.
+The visual editor supports configuration of:
 
-This repository intentionally does not use `filename` in `hacs.json`, so HACS installs the whole repository and keeps the `translations/` directory together with `car-heater-card.js`. Create GitHub releases as normal tags without attaching a separate zip asset.
+- Timeline length
+- Timeline mode
+- Show power graph
+- Show temperature graph
+- Show heating curve
+- Show history
 
-Resource URL after HACS install:
+---
 
-```yaml
-/local/community/car-heater-card/car-heater-card.js
-```
+## Companion Integration
 
-## 0.4.0
+This card is designed for the Car Heater integration.
 
-- Temperature graph from Home Assistant history
-- Power graph from Home Assistant history
-- Planned runtime marker
-- Daily runtime history
-- All graph options are configurable in the visual editor
+---
+
+## License
+
+MIT License
